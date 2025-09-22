@@ -1,7 +1,10 @@
 '''
-implementation of FIM
-'''
+Tensorflow implementation of FIM
 
+@author:
+
+@references:
+'''
 import math
 import os, sys
 import numpy as np
@@ -51,8 +54,6 @@ def parse_args():
                         help='Regularizer for attention part.')
     parser.add_argument('--keep', nargs='?', default=1,
                         help='Keep probility (1-dropout) of each layer. 1: no dropout. The first index is for the attention-aware pairwise interaction layer.')
-    # parser.add_argument('--keep', nargs='?', default='[1.0,0.5]',
-    #                     help='Keep probility (1-dropout) of each layer. 1: no dropout. The first index is for the attention-aware pairwise interaction layer.')
 
     parser.add_argument('--lr', type=float, default=0.01,
                         help='Learning rate.')
@@ -143,18 +144,26 @@ class FIM(BaseEstimator, TransformerMixin):
                                                              self.train_features)
 
             batch_size = tf.shape(self.train_features)[0]
+
             sliced_embeddings = tf.TensorArray(dtype=tf.float32, size=batch_size, infer_shape=False)
+
             check_embeddings = tf.TensorArray(dtype=tf.int32, size=batch_size, infer_shape=False)
+
+
 
             _, sliced_embeddings,  check_embeddings= tf.while_loop(
                 cond=lambda i, _, __: i < batch_size,
                 body=self.process_batch,
                 loop_vars=(0, sliced_embeddings, check_embeddings)
             )
+            self.sliced_embeddings = tf.reshape(sliced_embeddings.stack(), [-1, self.fields_M * self.hidden_factor[0]])
 
-            self.sliced_embeddings111 = sliced_embeddings.stack()
-
-
+            c_i = self.sliced_embeddings
+            c_1 = tf.identity(self.sliced_embeddings)
+            for i in range(3):
+                c_i = self.dense_layer_with_relu(c_i, c_1, str(i), self.r_1[i])
+            self.check = c_i
+            self.c_i = tf.reduce_mean(c_i, -1, keepdims=True)  #batch * 5 * K
 
             # Model.
             element_wise_product_list = []
@@ -168,22 +177,23 @@ class FIM(BaseEstimator, TransformerMixin):
                     FiFj = min_ij*self.fields_M + max_ij
                     rFiFj = tf.nn.embedding_lookup(self.weights['field_r'],FiFj)
                     vivj = tf.multiply(self.featureMulField[:, i, :], self.featureMulField[:, j,:])
-                    element_wise_product_list.append(vivj) # i = None * K
+                    element_wise_product_list.append(vivj) # i = None * K  
                     count += 1
             self.element_wise_product = tf.stack(element_wise_product_list)  # (M'*(M'-1)) * None * K
             self.element_wise_product = tf.transpose(self.element_wise_product, perm=[1, 0, 2], name="element_wise_product")  # None * (M'*(M'-1)) * K
-            self.FMFFwFM = tf.reduce_sum(self.element_wise_product, 1, name="FMFFwFM")  # None * K
-            #self.prediction = tf.matmul(self.FwFM, self.weights['prediction'])
-            self.prediction = tf.reduce_sum(self.FMFFwFM, 1, keep_dims=True)
-            self.nonzero_linear = tf.nn.embedding_lookup(self.weights['feature_bias'],self.train_features)  # None * M' * K
+            self.F3IC = tf.reduce_sum(self.element_wise_product, 1, name="F3IC")  # None * K
+
+            self.prediction = tf.reduce_sum(self.F3IC, 1, keep_dims=True)
+            self.nonzero_linear = tf.nn.embedding_lookup(self.weights['feature_bias'],self.train_features)  # None * M' * K  
             self.linear = tf.reduce_sum(self.nonzero_linear, 1)  # None * 1
             Bias = self.weights['bias'] * tf.ones_like(self.train_labels)  # None * 1
-            self.out = tf.add_n([self.prediction, self.linear, Bias], name="out_FMFFwFM")
-            #self.out = tf.add_n([self.prediction, self.linear, Bias, self.c_i], name="out_FIM")# None * 1
+            #self.out = tf.add_n([self.prediction, self.linear, Bias], name="out_fim")
 
+            self.out = tf.add_n([self.prediction, self.linear, Bias, self.c_i], name="out_fim")# None * 1
+            #self.out = tf.add_n([self.c_i], name="out_fim")# None * 1
 
             if self.lamda_bilinear > 0:
-
+                
                 self.loss = tf.nn.l2_loss(tf.subtract(self.train_labels, self.out)) + tf.contrib.layers.l2_regularizer(
                     self.lamda_bilinear)(self.weights['feature_bias']) + tf.contrib.layers.l2_regularizer(
                     self.lamda_bilinear)(self.weights['feature_embeddings'])+ tf.contrib.layers.l2_regularizer(
@@ -218,16 +228,18 @@ class FIM(BaseEstimator, TransformerMixin):
                 total_parameters += variable_parameters
             if self.verbose > 0:
                 print("#params: %d" %total_parameters)
-
+                # params_file = 'params_ffim.txt'
+                # with open(params_file, 'a', encoding='utf-8') as wightfile:
+                #     wightfile.write(str(total_parameters))
+                #     wightfile.write('\n')
 
 
     def dense_layer_with_relu(self, x_l, x_1, name="layer", i=0):
         """
-
         parameter：
             a_l: [batch_size, input_dim]
-            output_dim:
-            name:
+            output_dim: 
+            name: 
 
         return：
             a_l_plus_1: [batch_size, output_dim]
@@ -235,8 +247,11 @@ class FIM(BaseEstimator, TransformerMixin):
         input_dim = self.fields_M * self.hidden_factor[0]
         output_dim = input_dim
         with tf.variable_scope(name):
+            # 初始化器实例化
             glorot_init = tf.glorot_normal_initializer()
             zeros_init = tf.zeros_initializer()
+
+            # 定义权重和偏置
             W_l = tf.get_variable(
                 name="W",
                 shape=[input_dim, output_dim],
@@ -247,8 +262,8 @@ class FIM(BaseEstimator, TransformerMixin):
                 shape=[output_dim],
                 initializer=zeros_init
             )
-            r = tf.random_uniform(shape=[], minval=0, maxval=5, dtype=tf.int32)
 
+            r = tf.random_uniform(shape=[], minval=0, maxval=5, dtype=tf.int32)
             actual_shift = self.hidden_factor[0] * i
             c_l = tf.matmul(x_l, W_l) + b_l
             c_rolled = tf.roll(c_l, shift=actual_shift, axis=-1)
@@ -256,21 +271,20 @@ class FIM(BaseEstimator, TransformerMixin):
             x_l_plus_1 = x_1 * c_rolled + x_l
             x_l_plus_1 = tf.nn.sigmoid(x_l_plus_1)
 
-
             return x_l_plus_1
     def process_batch(self, i, sliced_embeddings, check_embeddings):
 
         indices = self.train_f_index[i]  #  [num_indices]
-        embeddings = self.nonzero_features_embeddings_branch[i]  # [seq_len, embedding_dim]
+        embeddings = self.nonzero_features_embeddings_branch[i]  #  [seq_len, embedding_dim]
 
         #  [0, 1, 5, 12, 20]
         full_indices = tf.concat([[0], indices, [tf.shape(embeddings)[0]]], axis=0)
         print(full_indices)
 
-        #
+        # 
         batch_slices = tf.TensorArray(dtype=tf.float32, size=self.fields_M, infer_shape=False)
 
-        #
+        # 
         def process_slice(j, batch_slices):
             start = full_indices[j]
             end = full_indices[j + 1]
@@ -280,13 +294,13 @@ class FIM(BaseEstimator, TransformerMixin):
             batch_slices = batch_slices.write(j, slice_mean)
             return j + 1, batch_slices
 
-        #
+        # 
         _, batch_slices = tf.while_loop(
             cond=lambda j, _: j < self.fields_M,
             body=process_slice,
             loop_vars=(0, batch_slices)
         )
-        #
+        # 
         all_slices = batch_slices.stack()
 
         check_embeddings = check_embeddings.write(i, full_indices)
@@ -339,6 +353,9 @@ class FIM(BaseEstimator, TransformerMixin):
                 name='field_embeddings')  # fields_M * K
             all_weights['field_embeddings'] = tf.concat([all_weights['field_embeddings'], zero_pad], axis=0)
 
+            # all_weights['field_r'] = tf.Variable(
+            #     tf.random_normal([self.fields_M*self.fields_M, 1], 0, self.std, seed=self.init_seed),
+            #     name='field_r')  # features_M * K
             all_weights['field_r'] = tf.Variable(
                 tf.random_normal([(self.fields_M+1)*(self.fields_M + 1), 1], 0, self.std, seed=self.init_seed),
                 name='field_r')  # features_M * K
@@ -351,7 +368,13 @@ class FIM(BaseEstimator, TransformerMixin):
 
         # prediction layer
         all_weights['prediction'] = tf.Variable(np.ones((self.hidden_factor[1], 1), dtype=np.float32))  # hidden_factor * 1
-
+        #deep
+        # for i in range(0, self.num_variable):
+        #     w_name = 'W_' + str(i)
+        #     b_name = 'b_' + str(i)
+        #     all_weights['w_name'] = tf.Variable(
+        #         tf.random_normal([self.fields_M, self.hidden_factor[0]], 0, self.std, seed=self.init_seed),
+        #         name='field_embeddings')
         return all_weights
 
     def batch_norm_layer(self, x, train_phase, scope_bn):
@@ -437,7 +460,7 @@ class FIM(BaseEstimator, TransformerMixin):
             total_batch = int(len(Train_data['Y']) / self.batch_size)
             for i in range(total_batch):
                 # generate a batch
-                batch_xs = self.get_random_block_from_data(Train_data, self.batch_size) #获取了一个随机块，可能并不是所有数据都能取到？
+                batch_xs = self.get_random_block_from_data(Train_data, self.batch_size) #
                 # Fit training
                 self.partial_fit(batch_xs)
             t2 = time()
@@ -459,12 +482,12 @@ class FIM(BaseEstimator, TransformerMixin):
             self.test_mae.append(test_result_MAE)
             print("Epoch %d [%.1f s]\ttest_MSE=%.4f, test_MAE=%.4f [%.1f s]"
                   %(epoch+1, t2-t1, test_result_MSE, test_result_MAE, time()-t2))
-            if self.eva_termination(self.valid_mse): #跳出
+            if self.eva_termination(self.valid_mse): #
                 break
 
-        # if self.pretrain_flag < 0 or self.pretrain_flag == 2:
-        #     print("Save model to file as pretrain.")
-        #     self.saver.save(self.sess, self.save_file)
+        if self.pretrain_flag < 0 or self.pretrain_flag == 2:
+            print("Save model to file as pretrain.")
+            self.saver.save(self.sess, self.save_file)
 
     def eva_termination(self, valid):
         if len(valid) > 5:
@@ -483,8 +506,8 @@ class FIM(BaseEstimator, TransformerMixin):
         while len(batch_xs['X']) > 0:
             num_batch = len(batch_xs['Y'])
             feed_dict = {self.train_features: batch_xs['X'],  self.train_field: batch_xs['X_f'], self.train_f_index: data['X_i'], self.train_labels: [[y] for y in batch_xs['Y']], self.dropout_keep: 1.0, self.train_phase: False}
-            batch_out, wight_temp,  sliced_embeddings111 = self.sess.run(
-                [self.out, self.weights,self.sliced_embeddings111], feed_dict=feed_dict)
+            batch_out, wight_temp, check, c_i, sliced_embeddings = self.sess.run(
+                [self.out, self.weights, self.check, self.c_i,self.sliced_embeddings], feed_dict=feed_dict)
 
             if batch_index == 0:
                 y_pred = np.reshape(batch_out, (num_batch,))
@@ -515,6 +538,7 @@ class FIM(BaseEstimator, TransformerMixin):
         return tf.split(field, num_or_size_splits=split_sizes, axis=0)
 def make_save_file(args):
     pretrain_path = '../pretrain/%s_%d' %(args.dataset, eval(args.hidden_factor)[1])
+    print(pretrain_path)
     if args.mla:
         pretrain_path += '_mla'
     if not os.path.exists(pretrain_path):
@@ -523,12 +547,12 @@ def make_save_file(args):
     return save_file
 
 def train(args):
-    np.random.seed(4096)
-    r_1 = np.random.randint(low=0, high=2, size=(5)).tolist()
+    np.random.seed(28)
+    r_1 = np.random.randint(low=0, high=5, size=(3)).tolist()
     # Data loading
     data = DATA.LoadData(args.path, args.dataset)
     if args.verbose > 0:
-        print("FIM: dataset=%s, factors=%s, attention=%d, freeze_fm=%d, #epoch=%d, batch=%d, lr=%.4f, lambda_attention=%.1e, keep=%s, optimizer=%s, batch_norm=%d, decay=%f, activation=%s"
+        print("FwFM: dataset=%s, factors=%s, attention=%d, freeze_fm=%d, #epoch=%d, batch=%d, lr=%.4f, lambda_attention=%.1e, keep=%s, optimizer=%s, batch_norm=%d, decay=%f, activation=%s"
               %(args.dataset, args.hidden_factor, args.attention, args.freeze_fm, args.epoch, args.batch_size, args.lr, args.lamda, args.keep, args.optimizer,
               args.batch_norm, args.decay, args.activation))
     activation_function = tf.nn.relu
@@ -564,13 +588,90 @@ def train(args):
     print ("Best Iter(validation)= %d\t train_mse = %.4f, valid_mse = %.4f,train_mae = %.4f, valid_mae = %.4f [%.1f s]"
            %(best_epoch+1, model.train_mse[best_epoch], model.valid_mse[best_epoch],model.train_mae[best_epoch], model.valid_mae[best_epoch], time()-t1))
 
+def evaluate(args):
+    # load test data
+    data = DATA.LoadData(args.path, args.dataset).Test_data
+    save_file = make_save_file(args)
 
+    # load the graph
+    weight_saver = tf.train.import_meta_graph(save_file + '.meta')
+    pretrain_graph = tf.get_default_graph()
+    # load tensors
+    # feature_embeddings = pretrain_graph.get_tensor_by_name('feature_embeddings:0')
+    # feature_bias = pretrain_graph.get_tensor_by_name('feature_bias:0')
+    # bias = pretrain_graph.get_tensor_by_name('bias:0')
+    # fim = pretrain_graph.get_tensor_by_name('fim:0')
+    out_of_fim = pretrain_graph.get_tensor_by_name('out_fim:0')
+    interactions = pretrain_graph.get_tensor_by_name('interactions:0')
+    attention_out = pretrain_graph.get_tensor_by_name('attention_out:0')
+    # placeholders for fim
+    train_features_fim = pretrain_graph.get_tensor_by_name('train_features_fim:0')
+    train_labels_fim = pretrain_graph.get_tensor_by_name('train_labels_fim:0')
+    dropout_keep_fim = pretrain_graph.get_tensor_by_name('dropout_keep_fim:0')
+    train_phase_fim = pretrain_graph.get_tensor_by_name('train_phase_fim:0')
+
+    # tensors and placeholders for fm
+    if args.mla:
+         out_of_fm = pretrain_graph.get_tensor_by_name('out_fm:0')
+         element_wise_product = pretrain_graph.get_tensor_by_name('element_wise_product:0')
+         train_features_fm = pretrain_graph.get_tensor_by_name('train_features_fm:0')
+         train_labels_fm = pretrain_graph.get_tensor_by_name('train_labels_fm:0')
+         dropout_keep_fm = pretrain_graph.get_tensor_by_name('dropout_keep_fm:0')
+         train_phase_fm = pretrain_graph.get_tensor_by_name('train_phase_fm:0')
+
+    # restore session
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    sess = tf.Session(config=config)
+    weight_saver.restore(sess, save_file)
+
+    # start evaluation
+    num_example = len(data['Y'])
+    if args.mla:
+        feed_dict = {train_features_fim: data['X'], train_labels_fim: [[y] for y in data['Y']], dropout_keep_fim: [1.0,1.0], train_phase_fim: False, \
+                     train_features_fm: data['X'], train_labels_fm: [[y] for y in data['Y']], dropout_keep_fm: 1.0, train_phase_fm: False}
+        ao, inter, out_fm, predictions = sess.run((attention_out, interactions, out_of_fm, out_of_fim), feed_dict=feed_dict)
+    else:
+        feed_dict = {train_features_fim: data['X'], train_labels_fim: [[y] for y in data['Y']], dropout_keep_fim: [1.0,1.0], train_phase_fim: False}
+        predictions = sess.run((out_of_fim), feed_dict=feed_dict)
+
+    # calculate rmse
+    y_pred_fim = np.reshape(predictions, (num_example,))
+    y_true = np.reshape(data['Y'], (num_example,))
+
+    predictions_bounded = np.maximum(y_pred_fim, np.ones(num_example) * min(y_true))  # bound the lower values
+    predictions_bounded = np.minimum(predictions_bounded, np.ones(num_example) * max(y_true))  # bound the higher values
+    RMSE = math.sqrt(mean_squared_error(y_true, predictions_bounded))
+
+    print("Test RMSE: %.4f"%(RMSE))
+
+    if args.mla:
+        # select significant cases
+        ao = np.reshape(ao, (num_example, 3))
+        y_pred_fm = np.reshape(out_fm, (num_example,))
+        pred_abs_fm = abs(y_pred_fm - y_true)
+        pred_abs_fim = abs(y_pred_fim - y_true)
+        pred_abs = pred_abs_fim - pred_abs_fm
+
+        ids = np.arange(0, num_example, 1)
+
+        sorted_ids = sorted(ids, key=lambda k: pred_abs_fim[k]+abs(ao[k][0]*ao[k][1]*ao[k][2]))
+        # sorted_ids = sorted(ids, key=lambda k: abs(ao[k][0]*ao[k][1]*ao[k][2]))
+        for i in range(3):
+            _id = sorted_ids[i]
+            print('## %d: %d'%(i+1, y_true[_id]))
+            print('0.33*%.2f + 0.33*%.2f + 0.33*%.2f = %.2f'%(inter[_id][0], inter[_id][1], inter[_id][2], y_pred_fm[_id]))
+            print('%.2f*%.2f + %.2f*%.2f + %.2f*%.2f = %.2f\n'%(\
+                          ao[_id][0], inter[_id][0], \
+                          ao[_id][1], inter[_id][1], \
+                          ao[_id][2], inter[_id][2], y_pred_fim[_id]))
 
 
 if __name__ == '__main__':
 
+
     para_index = 0 #
-    hidden_factor = ['[32,32]']  # 
+    hidden_factor = ['[32,32]']  # 32
     lamda_attention = [0.8]
     optimizer = ['AdamOptimizer']
     seed = [1024]
@@ -584,8 +685,8 @@ if __name__ == '__main__':
                         for std_i in std:
                             para_index += 1
                             parser = argparse.ArgumentParser(description="Run.")
-                            parser.add_argument('--process', nargs='?', default='all',
-                                                help='Process type: all.')
+                            parser.add_argument('--process', nargs='?', default='train',
+                                                help='Process type: train, evaluate.')
                             parser.add_argument('--mla', type=int, default=0,
                                                 help='Set the experiment mode to be Micro Level Analysis or not: 0-disable, 1-enable.')
                             parser.add_argument('--path', nargs='?', default='../data/',
@@ -594,7 +695,7 @@ if __name__ == '__main__':
                                                 help='Choose a dataset.')
                             parser.add_argument('--valid_dimen', type=int, default=3,
                                                 help='Valid dimension of the dataset. (e.g. frappe=10, ml-tag=3)')
-                            parser.add_argument('--epoch', type=int, default=1,
+                            parser.add_argument('--epoch', type=int, default=20,
                                                 help='Number of epochs.')
                             parser.add_argument('--pretrain', type=int, default=-1,
                                                 help='flag for pretrain. 1: initialize from pretrain; 0: randomly initialize; -1: save to pretrain file; 2: initialize from pretrain and save to pretrain file')
@@ -636,7 +737,8 @@ if __name__ == '__main__':
                             args = parser.parse_args()
                             if args.process == 'train':
                                 train(args)
-
+                            elif args.process == 'evaluate':
+                                evaluate(args)
 
 
 
