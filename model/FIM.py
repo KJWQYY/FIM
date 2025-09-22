@@ -1,9 +1,5 @@
 '''
-Tensorflow implementation of FIM
-
-@author:
-
-@references:
+implementation of FIM
 '''
 
 import math
@@ -33,8 +29,6 @@ def parse_args():
                         help='Set the experiment mode to be Micro Level Analysis or not: 0-disable, 1-enable.')
     parser.add_argument('--path', nargs='?', default='../data/',
                         help='Input data path.')
-    # parser.add_argument('--dataset', nargs='?', default='ml-tag',
-    #                     help='Choose a dataset.')
     parser.add_argument('--dataset', nargs='?', default='douban',
                         help='Choose a dataset.')
     parser.add_argument('--valid_dimen', type=int, default=3,
@@ -140,9 +134,9 @@ class FIM(BaseEstimator, TransformerMixin):
             # Variables.
             self.weights = self._initialize_weights()
             self.nonzero_features_embeddings = tf.nn.embedding_lookup(self.weights['feature_embeddings'],
-                                                             self.train_features)  # None * M' * K  返回不为0的对应的位置，m*k，前面的None是batch
+                                                             self.train_features)  # None * M' * K  
             self.nonzero_fields_embeddings = tf.nn.embedding_lookup(self.weights['field_embeddings'],
-                                                                    self.train_field)  # None * M' * K  返回不为0的对应的位置，m*k，前面的None是batch
+                                                                    self.train_field)  # None * M' * K  
             self.featureMulField = tf.multiply(self.nonzero_features_embeddings, self.nonzero_fields_embeddings)
 
             self.nonzero_features_embeddings_branch = tf.nn.embedding_lookup(self.weights['feature_embeddings_branch'],
