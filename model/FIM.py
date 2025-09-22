@@ -135,9 +135,9 @@ class FIM(BaseEstimator, TransformerMixin):
             # Variables.
             self.weights = self._initialize_weights()
             self.nonzero_features_embeddings = tf.nn.embedding_lookup(self.weights['feature_embeddings'],
-                                                             self.train_features)  # None * M' * K  
+                                                             self.train_features)  # None * M' * K
             self.nonzero_fields_embeddings = tf.nn.embedding_lookup(self.weights['field_embeddings'],
-                                                                    self.train_field)  # None * M' * K  
+                                                                    self.train_field)  # None * M' * K
             self.featureMulField = tf.multiply(self.nonzero_features_embeddings, self.nonzero_fields_embeddings)
 
             self.nonzero_features_embeddings_branch = tf.nn.embedding_lookup(self.weights['feature_embeddings_branch'],
@@ -184,7 +184,7 @@ class FIM(BaseEstimator, TransformerMixin):
             self.F3IC = tf.reduce_sum(self.element_wise_product, 1, name="F3IC")  # None * K
 
             self.prediction = tf.reduce_sum(self.F3IC, 1, keep_dims=True)
-            self.nonzero_linear = tf.nn.embedding_lookup(self.weights['feature_bias'],self.train_features)  # None * M' * K  
+            self.nonzero_linear = tf.nn.embedding_lookup(self.weights['feature_bias'],self.train_features)  # None * M' * K
             self.linear = tf.reduce_sum(self.nonzero_linear, 1)  # None * 1
             Bias = self.weights['bias'] * tf.ones_like(self.train_labels)  # None * 1
             #self.out = tf.add_n([self.prediction, self.linear, Bias], name="out_fim")
@@ -193,7 +193,7 @@ class FIM(BaseEstimator, TransformerMixin):
             #self.out = tf.add_n([self.c_i], name="out_fim")# None * 1
 
             if self.lamda_bilinear > 0:
-                
+
                 self.loss = tf.nn.l2_loss(tf.subtract(self.train_labels, self.out)) + tf.contrib.layers.l2_regularizer(
                     self.lamda_bilinear)(self.weights['feature_bias']) + tf.contrib.layers.l2_regularizer(
                     self.lamda_bilinear)(self.weights['feature_embeddings'])+ tf.contrib.layers.l2_regularizer(
@@ -238,8 +238,8 @@ class FIM(BaseEstimator, TransformerMixin):
         """
         parameter：
             a_l: [batch_size, input_dim]
-            output_dim: 
-            name: 
+            output_dim:
+            name:
 
         return：
             a_l_plus_1: [batch_size, output_dim]
@@ -281,10 +281,10 @@ class FIM(BaseEstimator, TransformerMixin):
         full_indices = tf.concat([[0], indices, [tf.shape(embeddings)[0]]], axis=0)
         print(full_indices)
 
-        # 
+        #
         batch_slices = tf.TensorArray(dtype=tf.float32, size=self.fields_M, infer_shape=False)
 
-        # 
+        #
         def process_slice(j, batch_slices):
             start = full_indices[j]
             end = full_indices[j + 1]
@@ -294,13 +294,13 @@ class FIM(BaseEstimator, TransformerMixin):
             batch_slices = batch_slices.write(j, slice_mean)
             return j + 1, batch_slices
 
-        # 
+        #
         _, batch_slices = tf.while_loop(
             cond=lambda j, _: j < self.fields_M,
             body=process_slice,
             loop_vars=(0, batch_slices)
         )
-        # 
+        #
         all_slices = batch_slices.stack()
 
         check_embeddings = check_embeddings.write(i, full_indices)
@@ -588,83 +588,6 @@ def train(args):
     print ("Best Iter(validation)= %d\t train_mse = %.4f, valid_mse = %.4f,train_mae = %.4f, valid_mae = %.4f [%.1f s]"
            %(best_epoch+1, model.train_mse[best_epoch], model.valid_mse[best_epoch],model.train_mae[best_epoch], model.valid_mae[best_epoch], time()-t1))
 
-def evaluate(args):
-    # load test data
-    data = DATA.LoadData(args.path, args.dataset).Test_data
-    save_file = make_save_file(args)
-
-    # load the graph
-    weight_saver = tf.train.import_meta_graph(save_file + '.meta')
-    pretrain_graph = tf.get_default_graph()
-    # load tensors
-    # feature_embeddings = pretrain_graph.get_tensor_by_name('feature_embeddings:0')
-    # feature_bias = pretrain_graph.get_tensor_by_name('feature_bias:0')
-    # bias = pretrain_graph.get_tensor_by_name('bias:0')
-    # fim = pretrain_graph.get_tensor_by_name('fim:0')
-    out_of_fim = pretrain_graph.get_tensor_by_name('out_fim:0')
-    interactions = pretrain_graph.get_tensor_by_name('interactions:0')
-    attention_out = pretrain_graph.get_tensor_by_name('attention_out:0')
-    # placeholders for fim
-    train_features_fim = pretrain_graph.get_tensor_by_name('train_features_fim:0')
-    train_labels_fim = pretrain_graph.get_tensor_by_name('train_labels_fim:0')
-    dropout_keep_fim = pretrain_graph.get_tensor_by_name('dropout_keep_fim:0')
-    train_phase_fim = pretrain_graph.get_tensor_by_name('train_phase_fim:0')
-
-    # tensors and placeholders for fm
-    if args.mla:
-         out_of_fm = pretrain_graph.get_tensor_by_name('out_fm:0')
-         element_wise_product = pretrain_graph.get_tensor_by_name('element_wise_product:0')
-         train_features_fm = pretrain_graph.get_tensor_by_name('train_features_fm:0')
-         train_labels_fm = pretrain_graph.get_tensor_by_name('train_labels_fm:0')
-         dropout_keep_fm = pretrain_graph.get_tensor_by_name('dropout_keep_fm:0')
-         train_phase_fm = pretrain_graph.get_tensor_by_name('train_phase_fm:0')
-
-    # restore session
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
-    sess = tf.Session(config=config)
-    weight_saver.restore(sess, save_file)
-
-    # start evaluation
-    num_example = len(data['Y'])
-    if args.mla:
-        feed_dict = {train_features_fim: data['X'], train_labels_fim: [[y] for y in data['Y']], dropout_keep_fim: [1.0,1.0], train_phase_fim: False, \
-                     train_features_fm: data['X'], train_labels_fm: [[y] for y in data['Y']], dropout_keep_fm: 1.0, train_phase_fm: False}
-        ao, inter, out_fm, predictions = sess.run((attention_out, interactions, out_of_fm, out_of_fim), feed_dict=feed_dict)
-    else:
-        feed_dict = {train_features_fim: data['X'], train_labels_fim: [[y] for y in data['Y']], dropout_keep_fim: [1.0,1.0], train_phase_fim: False}
-        predictions = sess.run((out_of_fim), feed_dict=feed_dict)
-
-    # calculate rmse
-    y_pred_fim = np.reshape(predictions, (num_example,))
-    y_true = np.reshape(data['Y'], (num_example,))
-
-    predictions_bounded = np.maximum(y_pred_fim, np.ones(num_example) * min(y_true))  # bound the lower values
-    predictions_bounded = np.minimum(predictions_bounded, np.ones(num_example) * max(y_true))  # bound the higher values
-    RMSE = math.sqrt(mean_squared_error(y_true, predictions_bounded))
-
-    print("Test RMSE: %.4f"%(RMSE))
-
-    if args.mla:
-        # select significant cases
-        ao = np.reshape(ao, (num_example, 3))
-        y_pred_fm = np.reshape(out_fm, (num_example,))
-        pred_abs_fm = abs(y_pred_fm - y_true)
-        pred_abs_fim = abs(y_pred_fim - y_true)
-        pred_abs = pred_abs_fim - pred_abs_fm
-
-        ids = np.arange(0, num_example, 1)
-
-        sorted_ids = sorted(ids, key=lambda k: pred_abs_fim[k]+abs(ao[k][0]*ao[k][1]*ao[k][2]))
-        # sorted_ids = sorted(ids, key=lambda k: abs(ao[k][0]*ao[k][1]*ao[k][2]))
-        for i in range(3):
-            _id = sorted_ids[i]
-            print('## %d: %d'%(i+1, y_true[_id]))
-            print('0.33*%.2f + 0.33*%.2f + 0.33*%.2f = %.2f'%(inter[_id][0], inter[_id][1], inter[_id][2], y_pred_fm[_id]))
-            print('%.2f*%.2f + %.2f*%.2f + %.2f*%.2f = %.2f\n'%(\
-                          ao[_id][0], inter[_id][0], \
-                          ao[_id][1], inter[_id][1], \
-                          ao[_id][2], inter[_id][2], y_pred_fim[_id]))
 
 
 if __name__ == '__main__':
