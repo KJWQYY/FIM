@@ -7,7 +7,7 @@
    -numpy  
 
    -sklearn
-## Dataset
+## Datasets
 We use the same input format as libffm
 ### MM-Douban
 https://pan.baidu.com/s/1W0BXOE4X2bOuQAI-SFtlDg Code:vp85
